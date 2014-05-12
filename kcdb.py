@@ -41,7 +41,10 @@ class kcBote:
 			
 			if(self.equip[s].type[3] in range(6, 10)):
 			##	print [self.equip[s].aa]
-				seiq += self.equip[s].aa * math.sqrt(self.inst['onslot'][i])
+				try:
+					seiq += self.equip[s].aa * math.sqrt(self.inst['onslot'][i])
+				except:
+					pass
 			
 			i+=1
 			
@@ -159,9 +162,10 @@ class kcDb:
 	
 	def sync(self, table, data, detail = None):
 		
+		print "i'm here", table
+		
 		##			these tables only occur during sorties
 		if(table in ['map.start','map.next','sortie.battle','battle_midnight.battle','sortie.battleresult', 'battle_midnight.sp_midnight']):
-			
 			self.handle_sortie(table, data, detail)
 		
 		##					these tables can occur during sortie if you get a drop so gotta exclude
@@ -170,7 +174,19 @@ class kcDb:
 			self.in_sortie = False
 		
 		## load ship type database
-		if(table == 'master.ship'):
+		if(table == 'port.port'):
+			self.sync('member.ndock',data.pop('ndock'))
+			self.sync('member.basic',data.pop('basic'))
+			self.sync('member.deck',data.pop('deck_port'))
+			self.sync('member.material',data.pop('material'))
+			self.sync('member.ship',data.pop('ship'))
+			
+		elif(table == 'start2'):
+			self.sync('master.ship',data.pop('mst_ship'))
+			self.sync('master.slot_item',data.pop('mst_slotitem'))
+			self.sync('master.stype',data.pop('mst_stype'))
+		
+		elif(table == 'master.ship'):
 			self.cur.executemany('replace into ship values(:id, :sortno, :ctype, :stype, :name, :yomi, :maxeq, :slot_num, :tous, :bull_max, :fuel_max, :soku, :sokuh, :leng, :houg, :raig, :tyku, :tais, :taik, :souk, :saku, :kaih, :luck, :aftershipid, :afterlv, :afterbull, :afterfuel)',
 				map(lambda y: dict(map(lambda (k, v): (k,v[0]) if (type(v) is list and len(v) == 2) else (k,unicode(v)), y.iteritems())), data) )
 				## v[0] for the base values. v[1] would be the max, but that's included with the individual ships -- and we need a base to calculate from to find out if a ship can be upgraded (since equip bonuses are included in the stats)
@@ -194,7 +210,7 @@ class kcDb:
 				self.ship_type[row.pop('id')] = row
 			
 		## load item database (if for a change it's not fucked in the packet phase)
-		elif(table == 'master.slotitem'):
+		elif(table == 'master.slot_item'):
 			self.cur.executemany('replace into equip values(:id, :name, :type, :tyku)',
 				map(lambda y: {k:unicode(v) for k, v in y.iteritems()},data))
 			self.con.commit()
@@ -227,7 +243,7 @@ class kcDb:
 					del self.bote[k]
 		
 		## slot items are rare to catch in their entirety so cache cache cache
-		elif(table == 'member.slotitem'):
+		elif(table == 'member.slot_item'):
 			
 			self.cur.executemany('replace into mequip values(:id, :slotitem_id)',data)
 			self.con.commit()
@@ -389,13 +405,18 @@ class kcDb:
 						'ship_drop': (n['result']['get_ship']['ship_id'] if ('get_ship' in n['result'] and 'ship_id' in n['result']['get_ship']) else None),
 						'time':time.time()
 						})
-				except:
-					print "battle results incomplete, skipped"
+				except Exception, msg:
+					print "Battle results incomplete, skipped: %s"%str((msg))
 		
 		if(len(temp) > 0):
 			self.cur.executemany('insert into nodestat values(:world,:map,:node,:comp,:form,:result,:cont,:ship_drop,:time)',temp)
 			self.con.commit()
-		
+	
+	def debug_packet(self, table, data):
+		f = open(str(time.time())+table+'.dbg','w')
+		f.write(data)
+		f.close()
+	
 	def handle_request(self, data):
 		
 		try:
@@ -407,7 +428,9 @@ class kcDb:
 		if(type(table) is tuple):
 			table, detail = table
 		
-		table = re.sub(r'api_[^_]+_(.+)$', r'\1', table)
+	##	print table
+		
+		table = re.sub(r'api_(?:[^_]+_)?(.+)$', r'\1', table)
 		data = re.sub(r'\n*','',data)
 		data = re.sub(r'api_','',data)
 		
@@ -416,8 +439,14 @@ class kcDb:
 		except KeyError:
 			return
 		except Exception, msg:
-		##	print 'Packet for %s borked'%table, str((msg))
+			print 'Packet for %s borked:'%table, str((msg))
+			self.debug_packet(table, data)
 			return
+		
+	##	print table
+		
+		if(re.search(r'start2',table)):
+			self.debug_packet(table,str(detail)+"\n\n"+json.dumps(data))
 		
 		try:
 			self.sync(table, data, detail)
@@ -438,6 +467,7 @@ class kcListener:
 	
 	def __init__(self):
 		
+	##	self.pop = sub.Popen(('pkexec', __folder__+'/kcsniffer.py'),stdout=sub.PIPE)
 		self.pop = sub.Popen(('sudo', __folder__+'/kcsniffer.py'),stdout=sub.PIPE)
 		self.cap = self.pop.stdout
 	
@@ -447,23 +477,15 @@ class kcListener:
 			captured = []
 			
 			for data in self.cap:
-				
-				get = re.search(r'GET \/kcs\/', data)
-				if(get):
-					if(captured):
-						sniffer.put(captured)
-						captured = []
+			
+				if(re.search(r'GET \/kcs\/', data)):
 					continue
-					
+				
 				post = re.search(r'POST \/kcsapi\/(.+) HTTP', data)
 				if(post):
 					request = re.search(r'(api%5F.+)$', data)
 					if(request):
 						request = {k.replace('api_',''):(v[0] if len(v) < 2 else v) for k,v in urlparse.parse_qs(request.group(1)).items() if k not in ['api_verno', 'api_token']}
-					
-					if(captured):
-						sniffer.put(captured)
-						captured = []
 					
 					captured.append((re.sub(r'\/','.',post.group(1)), request))
 				
@@ -473,10 +495,9 @@ class kcListener:
 					
 					if(sv):
 						captured.append(sv.group(1))
-					
-					elif((not re.search(r'200 OK', data)) and len(captured) > 1):
-						captured[1] += data
-
+						sniffer.put(captured)
+						captured = []
+				
 listener = kcListener()
 db = kcDb()
 

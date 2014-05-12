@@ -119,6 +119,9 @@ class kcFleetBote(gtk.Frame):
 		self.add(grid)
 		
 		self.bote = kcdb.db.bote[bote]
+		if(not isinstance(self.bote, kcdb.kcBote)):
+			return
+		
 		self.id = self.bote.id
 		
 		self.name = kcLabel(u'<span font="18px">%s</span> <span font="32px">%s</span>')
@@ -168,6 +171,8 @@ class kcFleetBote(gtk.Frame):
 	
 	def update(self):
 		self.bote = kcdb.db.bote[self.id]
+		if(not isinstance(self.bote, kcdb.kcBote)):
+			return
 		
 		self.name.txt(self.bote.type, self.bote.name)
 		
@@ -330,7 +335,7 @@ class kcBoteStore(gtk.ListStore):
 					b.base['type'], ## 2
 					
 					b.name, ## 3
-					b.base['sort'], ## 4
+					b.id, ## 4
 					
 					'%d (next: %d)'%(b.lv,b.inst['exp'][1]), ## 5
 					int(b.lv), ## 6
@@ -494,7 +499,7 @@ class kcWindow(gtk.Window):
 		self.note.append('quests', self.quest_page(), kcNotebookHandle(u'任務'))
 		
 		self.box.pack_start(kcHead(), False, False, 0)
-		self.box.pack_start(self.note, False, False, 0)
+		self.box.pack_start(self.note, False, True, 0)
 		self.box.pack_start(kcFoot(), False, False, 0)
 		
 		
